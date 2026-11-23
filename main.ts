@@ -27,28 +27,74 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-// VIDEO.json must exist, parse, and name a TikTok video address.
-const videoJsonPath = join(BOT_DIR, 'VIDEO.json');
-if (!existsSync(videoJsonPath)) fail('VIDEO.json is missing from the repository root.');
-let video: unknown;
-try {
-  video = JSON.parse(readFileSync(videoJsonPath, 'utf8'));
-} catch (err) {
-  fail(`VIDEO.json does not parse: ${(err as Error).message}`);
-}
-const url = (video as { url?: unknown } | null)?.url;
-if (typeof url !== 'string' || !url.startsWith('https://www.tiktok.com/@') || !url.includes('/video/')) {
-  fail('VIDEO.json must name a TikTok video address, https://www.tiktok.com/@<handle>/video/<id>.');
-}
-if (url.includes('<handle>') || url.includes('<id>')) {
-  console.error('main.ts: warning: VIDEO.json still holds the starter placeholder — replace it with the posted video address before submitting.');
+const BOUNTY_URL = 'https://make.fun/bounty/bring-the-humans-03';
+const VIDEO_PATH = /^\/@[^/]+\/video\/\d+$/;
+
+// Read and parse VIDEO.json from the repository root.
+function readVideoJson(): { url: unknown } {
+  const videoJsonPath = join(BOT_DIR, 'VIDEO.json');
+  if (!existsSync(videoJsonPath)) fail('VIDEO.json is missing from the repository root.');
+  try {
+    return JSON.parse(readFileSync(videoJsonPath, 'utf8')) as { url: unknown };
+  } catch (err) {
+    return fail(`VIDEO.json does not parse: ${(err as Error).message}`);
+  }
 }
 
-// The video and the required files must be present.
-for (const name of ['ad.mp4', 'README.md', 'LICENSE']) {
-  const path = join(BOT_DIR, name);
-  if (!existsSync(path) || statSync(path).size === 0) fail(`${name} is missing or empty.`);
+function parseVideoUrl(raw: string): URL {
+  try {
+    return new URL(raw);
+  } catch {
+    return fail(`VIDEO.json URL does not parse: ${raw}`);
+  }
 }
+
+// The URL must be a real TikTok video address: host www.tiktok.com and a
+// path of the form /@<handle>/video/<digits>. Returns the video id.
+function validateVideoUrl(url: unknown): string {
+  if (typeof url !== 'string') {
+    fail('VIDEO.json must name a TikTok video address, https://www.tiktok.com/@<handle>/video/<id>.');
+  }
+  const parsed = parseVideoUrl(url);
+  const match = VIDEO_PATH.exec(parsed.pathname);
+  if (parsed.protocol !== 'https:' || parsed.hostname !== 'www.tiktok.com' || !match) {
+    fail('VIDEO.json must name a TikTok video address, https://www.tiktok.com/@<handle>/video/<id>.');
+  }
+  return match[0].split('/video/')[1];
+}
+
+// The video and the required files must be present and non-empty.
+function checkRequiredFiles(): void {
+  for (const name of ['ad.mp4', 'README.md', 'LICENSE']) {
+    const path = join(BOT_DIR, name);
+    if (!existsSync(path) || statSync(path).size === 0) fail(`${name} is missing or empty.`);
+  }
+}
+
+// ad.mp4 must be a plausible upload: between 1 MiB and 100 MiB.
+function checkVideoSize(): number {
+  const size = statSync(join(BOT_DIR, 'ad.mp4')).size;
+  const mib = size / (1024 * 1024);
+  if (mib < 1 || mib > 100) fail(`ad.mp4 is ${mib.toFixed(2)} MiB; expected between 1 and 100 MiB.`);
+  return mib;
+}
+
+// README.md must carry the bounty-page link (the submit-time branding check).
+function checkReadmeBountyLink(): void {
+  if (!readFileSync(join(BOT_DIR, 'README.md'), 'utf8').includes(BOUNTY_URL)) {
+    fail(`README.md must link the bounty page ${BOUNTY_URL}.`);
+  }
+}
+
+const videoJsonPath = join(BOT_DIR, 'VIDEO.json');
+const video = readVideoJson();
+const videoId = validateVideoUrl(video.url);
+if (typeof video.url === 'string' && (video.url.includes('<handle>') || video.url.includes('<id>'))) {
+  console.error('main.ts: warning: VIDEO.json still holds the starter placeholder — replace it with the posted video address before submitting.');
+}
+checkRequiredFiles();
+const videoMib = checkVideoSize();
+checkReadmeBountyLink();
 
 mkdirSync(OUTPUT_DIR, { recursive: true });
 try {
@@ -56,3 +102,5 @@ try {
 } catch (err) {
   fail(`VIDEO.json could not be copied to ${OUTPUT_DIR}: ${(err as Error).message}`);
 }
+
+console.log(`main.ts: entry ok — video ${videoId}, ad.mp4 ${videoMib.toFixed(2)} MiB, VIDEO.json copied to ${OUTPUT_DIR}.`);
